@@ -1,18 +1,17 @@
 """
 Aerius - Crack & Puddle Detection Tool
 
-Scaffold for a Streamlit app that analyzes phone/drone videos of buildings/structures using a hybrid approach:
-- Local CV for puddles (offline)
+Scaffold for a Streamlit app that analyzes phone/drone videos of buildings/structures:
 - Roboflow API for crack detection
+- Roboflow API for puddle detection (if configured), else local CV fallback
 - Temporal merge, scoring (0-100), overlays, and PDF export
 
 Current features:
-1. Image Crack Test: Upload crack photos, run Roboflow inference, visualize predictions
+1. Image Test: Upload photos, run Roboflow inference for cracks + puddles, visualize predictions
 2. Video Scaffold: Upload videos, display metadata and first frame
 
 TODO: Integrate core/ingest.sample_frames for video frame extraction
-TODO: Implement core/puddles.detect_puddles for offline puddle detection
-TODO: Batch Roboflow crack detection in core/cracks_api
+TODO: Batch Roboflow crack & puddle detection
 TODO: Implement temporal tracking and overlay rendering
 TODO: Wire PDF report generation in core/report.py
 """
@@ -28,6 +27,9 @@ from PIL import Image, ImageDraw
 from inference_sdk import InferenceHTTPClient
 
 from core.cracks_api import ROBOFLOW_MODEL_ID, ROBOFLOW_CONFIDENCE, TARGET_RESIZE_WIDTH
+from core.puddle_api import infer_puddles_mask_from_rgb
+from core.puddles import detect_puddles, DEFAULT_CFG as PUD_CFG
+from core.overlay import draw_puddles_overlay
 from core.scoring import calculate_severity
 from core.report import generate_pdf_report
 
@@ -139,15 +141,16 @@ def resize_image_for_inference(image: Image.Image, target_width: int) -> Image.I
 # MAIN TABS
 # ============================================================================
 
-tab_image, tab_video = st.tabs(["Image Crack Test (Roboflow)", "Video Scaffold"])
+tab_image, tab_video = st.tabs(["Image Test (Cracks + Puddles)", "Video Scaffold"])
 
 
 # ============================================================================
-# TAB 1: IMAGE CRACK TEST
+# TAB 1: IMAGE TEST (CRACKS + PUDDLES)
 # ============================================================================
 
 with tab_image:
-    st.header("Image Crack Test")
+    st.header("Image Test")
+    st.caption("Detects cracks (Roboflow) and puddles (Roboflow if set, else local CV).")
     
     # Check for required config
     if not api_key or not api_key.strip():
@@ -201,13 +204,57 @@ with tab_image:
             image_resized = resize_image_for_inference(image, TARGET_RESIZE_WIDTH)
             st.write(f"Resized for inference: {image_resized.size}")
             
-            # Save to temp file
+            # Convert to RGB ndarray for puddle detection
+            image_rgb = np.array(image_resized)
+            
+            # ================================================================
+            # RUN PUDDLE DETECTION (Roboflow API preferred, else local CV)
+            # ================================================================
+            st.info("Running puddle detection...")
+            
+            # Check if puddle API is available
+            try:
+                from core import puddle_api
+                use_puddle_api = bool(api_key) and "xxxxx" not in puddle_api.PUDDLE_ROBOFLOW_MODEL_ID
+            except:
+                use_puddle_api = False
+            
+            if use_puddle_api:
+                puddle_result = infer_puddles_mask_from_rgb(image_rgb, api_key)
+                puddle_mask = puddle_result["mask"]
+                puddle_cov_pct = float(puddle_result["coverage_pct"])
+                
+                if puddle_result["error"]:
+                    st.warning(f"Puddle API fallback to local CV: {puddle_result['error']}")
+                    # Fallback to local CV
+                    image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+                    local_result = detect_puddles(image_bgr, PUD_CFG)
+                    puddle_mask = local_result["mask"]
+                    puddle_cov_pct = float(local_result.get("coverage_pct", 0.0))
+            else:
+                # Fallback to local CV
+                image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+                local_result = detect_puddles(image_bgr, PUD_CFG)
+                puddle_mask = local_result["mask"]
+                puddle_cov_pct = float(local_result.get("coverage_pct", 0.0))
+            
+            # ================================================================
+            # RUN CRACK DETECTION (Roboflow API)
+            # ================================================================
+            st.info("Running crack detection via Roboflow...")
+            
+            # Save resized image to temp file for crack inference
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 image_resized.save(tmp.name, "JPEG")
                 temp_path = tmp.name
             
+            crack_predictions = []
+            crack_coverage_pct = 0.0
+            crack_severity_score = 0
+            crack_recommendation = "No cracks detected."
+            
             try:
-                # Call Roboflow API
+                # Call Roboflow API for cracks
                 with st.spinner("Calling Roboflow API..."):
                     client = InferenceHTTPClient(
                         api_url="https://serverless.roboflow.com",
@@ -218,81 +265,127 @@ with tab_image:
                         model_id=ROBOFLOW_MODEL_ID
                     )
                 
-                # Display results
-                st.success("Inference complete!")
+                crack_predictions = result.get("predictions", [])
                 
-                predictions = result.get("predictions", [])
-                
-                # Calculate severity score and recommendation
-                severity_score, coverage_percent, recommendation = calculate_severity(
-                    predictions,
+                # Calculate crack severity score and recommendation
+                crack_severity_score, crack_coverage_pct, crack_recommendation = calculate_severity(
+                    crack_predictions,
                     image_width=image_resized.width,
                     image_height=image_resized.height
                 )
                 
-                # Display business-friendly metrics in columns
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Defects Detected", len(predictions))
-                
-                with col2:
-                    st.metric("Coverage Area", f"{coverage_percent:.1f}%")
-                
-                with col3:
-                    st.metric("Severity Score", f"{severity_score}/100")
-                
-                # Display recommendation in a highlighted box
-                if severity_score < 20:
-                    st.info(f"✓ {recommendation}")
-                elif severity_score < 60:
-                    st.warning(f"⚠ {recommendation}")
-                else:
-                    st.error(f"🔴 {recommendation}")
-                
-                # Draw and display overlay
-                if len(predictions) > 0:
-                    overlay = draw_polygons_on_image(image_resized.copy(), predictions)
-                    st.image(overlay, caption="Crack predictions overlayed", use_column_width=True)
-                    
-                    # Store for PDF generation later
-                    st.session_state['last_result'] = {
-                        'image': overlay,
-                        'severity_score': severity_score,
-                        'coverage_percent': coverage_percent,
-                        'defect_count': len(predictions),
-                        'recommendation': recommendation
-                    }
-                    
-                    # Generate PDF download button
-                    st.divider()
-                    st.subheader("Export Report")
-                    
-                    pdf_buffer = generate_pdf_report(
-                        overlay,
-                        severity_score,
-                        coverage_percent,
-                        len(predictions),
-                        recommendation
-                    )
-                    
-                    st.download_button(
-                        label="Download PDF Report",
-                        data=pdf_buffer,
-                        file_name=f"aerius_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                        mime="application/pdf",
-                        type="primary"
-                    )
-                else:
-                    st.info("No crack predictions found in this image.")
-                    st.image(image_resized, caption="Original image", use_column_width=True)
-                
             except Exception as e:
-                st.error(f"Error during inference: {str(e)}")
+                st.error(f"Crack inference failed: {str(e)}")
+                crack_predictions = []
+            
             finally:
-                # Clean up temp file
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
+            
+            # ================================================================
+            # DISPLAY RESULTS
+            # ================================================================
+            st.success("Analysis complete!")
+            
+            # Compute combined metrics
+            # Puddle severity based on coverage
+            puddle_severity = int(min(puddle_cov_pct * 5, 100))  # 20% coverage = 100 severity
+            
+            # Combined severity: 60% puddle + 40% crack
+            combined_severity = int(round(0.6 * puddle_severity + 0.4 * float(crack_severity_score)))
+            
+            # Total defect count: cracks + presence of puddles
+            total_defects = len(crack_predictions) + (1 if puddle_cov_pct > 0 else 0)
+            
+            # Average coverage across both detections
+            avg_coverage_pct = (puddle_cov_pct + float(crack_coverage_pct or 0.0)) / 2
+            
+            # Display individual metrics for cracks
+            st.subheader("Crack Analysis")
+            crack_cols = st.columns(4)
+            with crack_cols[0]:
+                st.metric("Cracks Detected", len(crack_predictions))
+            with crack_cols[1]:
+                st.metric("Crack Coverage", f"{crack_coverage_pct:.1f}%")
+            with crack_cols[2]:
+                st.metric("Crack Severity", f"{crack_severity_score}/100")
+            with crack_cols[3]:
+                if crack_predictions:
+                    avg_conf = np.mean([p.get("confidence", 0) for p in crack_predictions])
+                    st.metric("Avg Confidence", f"{avg_conf:.2f}")
+                else:
+                    st.metric("Avg Confidence", "N/A")
+            
+            # Display individual metrics for puddles
+            st.subheader("Puddle Analysis")
+            puddle_cols = st.columns(3)
+            with puddle_cols[0]:
+                st.metric("Puddle Coverage", f"{puddle_cov_pct:.1f}%")
+            with puddle_cols[1]:
+                st.metric("Puddle Severity", f"{puddle_severity}/100")
+            with puddle_cols[2]:
+                st.metric("Puddle Detected", "Yes" if puddle_cov_pct > 0 else "No")
+            
+            # Display combined metrics
+            st.subheader("Combined Assessment")
+            st.metric("Total Defects", f"{total_defects} (Cracks: {len(crack_predictions)}, Puddles: {'Yes' if puddle_cov_pct > 0 else 'No'})")
+            
+            # Display recommendation in a highlighted box
+            if combined_severity < 20:
+                st.info(f"✓ Structure appears sound. Monitor regularly.")
+            elif combined_severity < 60:
+                st.warning(f"⚠ {crack_recommendation if crack_predictions else 'Puddle detected. Monitor.'}")
+            else:
+                st.error(f"🔴 {crack_recommendation if crack_predictions else 'Significant puddle. Plan remediation.'}")
+            
+            # ================================================================
+            # BUILD COMBINED OVERLAY
+            # ================================================================
+            # Draw crack polygons first
+            if len(crack_predictions) > 0:
+                overlay_image = draw_polygons_on_image(image_resized.copy(), crack_predictions)
+                overlay_np = np.array(overlay_image)
+                # Convert to BGR for puddle overlay function
+                combined_overlay = draw_puddles_overlay(
+                    cv2.cvtColor(overlay_np, cv2.COLOR_RGB2BGR),
+                    puddle_mask,
+                    alpha=0.4
+                )
+            else:
+                # No cracks, just puddles
+                image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+                combined_overlay = draw_puddles_overlay(image_bgr, puddle_mask, alpha=0.4)
+            
+            st.image(combined_overlay, caption="Cracks + Puddles overlay", use_column_width=True)
+            
+            # ================================================================
+            # GENERATE PDF REPORT
+            # ================================================================
+            st.divider()
+            st.subheader("Export Report")
+            
+            # Prepare summary recommendation
+            summary_reco = f"Puddles: {puddle_cov_pct:.1f}% • Cracks: {float(crack_coverage_pct or 0.0):.1f}%"
+            
+            # Convert combined overlay (BGR ndarray) back to PIL for PDF
+            overlay_rgb = cv2.cvtColor(combined_overlay, cv2.COLOR_BGR2RGB)
+            overlay_pil = Image.fromarray(overlay_rgb)
+            
+            pdf_buffer = generate_pdf_report(
+                overlay_pil,
+                combined_severity,
+                avg_coverage_pct,
+                total_defects,
+                summary_reco
+            )
+            
+            st.download_button(
+                label="Download PDF Report",
+                data=pdf_buffer,
+                file_name=f"aerius_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                mime="application/pdf",
+                type="primary"
+            )
 
 
 # ============================================================================

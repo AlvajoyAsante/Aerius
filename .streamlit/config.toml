@@ -1,0 +1,6 @@
+[theme]
+base="dark"
+primaryColor="#6EE7B7"
+
+[client]
+showErrorDetails=true

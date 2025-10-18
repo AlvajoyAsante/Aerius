@@ -20,6 +20,7 @@ TODO: Wire PDF report generation in core/report.py
 import os
 import io
 import tempfile
+from datetime import datetime
 import streamlit as st
 import cv2
 import numpy as np
@@ -27,6 +28,8 @@ from PIL import Image, ImageDraw
 from inference_sdk import InferenceHTTPClient
 
 from core.cracks_api import ROBOFLOW_MODEL_ID, ROBOFLOW_CONFIDENCE, TARGET_RESIZE_WIDTH
+from core.scoring import calculate_severity
+from core.report import generate_pdf_report
 
 
 # ============================================================================
@@ -165,25 +168,33 @@ with tab_image:
                 help="JPG, JPEG, or PNG format"
             )
             
+            # Store uploaded file in session state
+            if uploaded_file:
+                st.session_state['current_image_file'] = uploaded_file
+            
             # Sample image button
             if st.button("Use Sample Image"):
-                # Look for first .jpg in samples/
-                samples_dir = "samples"
-                if os.path.isdir(samples_dir):
-                    images = [f for f in os.listdir(samples_dir) if f.lower().endswith(".jpg")]
-                    if images:
-                        sample_path = os.path.join(samples_dir, images[0])
-                        uploaded_file = open(sample_path, "rb")
-                        st.info(f"Loaded sample: {images[0]}")
+                # Load sample image from assets
+                sample_path = "assets/test_crack.jpg"
+                if os.path.isfile(sample_path):
+                    st.session_state['current_image_file'] = open(sample_path, "rb")
+                    st.rerun()
         
         with col2:
             st.subheader("Run Inference")
             run_button = st.button("Run Crack Inference", type="primary")
         
+        # Get image from session state
+        current_image = st.session_state.get('current_image_file')
+        
+        # Show message if image is loaded
+        if current_image:
+            st.success("Image loaded. Click 'Run Crack Inference' to analyze.")
+        
         # Process image if uploaded and button clicked
-        if uploaded_file and run_button:
+        if current_image and run_button:
             # Read and display image
-            image = Image.open(uploaded_file)
+            image = Image.open(current_image)
             st.write(f"Original size: {image.size}")
             
             # Resize for inference
@@ -211,25 +222,67 @@ with tab_image:
                 st.success("Inference complete!")
                 
                 predictions = result.get("predictions", [])
-                st.write(f"**Predictions found:** {len(predictions)}")
                 
-                if len(predictions) > 0:
-                    confidences = [p.get("confidence", 0) for p in predictions]
-                    avg_conf = np.mean(confidences) if confidences else 0
-                    st.write(f"**Average confidence:** {avg_conf:.2f}")
+                # Calculate severity score and recommendation
+                severity_score, coverage_percent, recommendation = calculate_severity(
+                    predictions,
+                    image_width=image_resized.width,
+                    image_height=image_resized.height
+                )
                 
-                # Show JSON excerpt (first 2 keys + prediction count)
-                excerpt = {
-                    "model_id": result.get("model_id", ""),
-                    "prediction_count": len(predictions),
-                    "time": result.get("time", "")
-                }
-                st.json(excerpt)
+                # Display business-friendly metrics in columns
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Defects Detected", len(predictions))
+                
+                with col2:
+                    st.metric("Coverage Area", f"{coverage_percent:.1f}%")
+                
+                with col3:
+                    st.metric("Severity Score", f"{severity_score}/100")
+                
+                # Display recommendation in a highlighted box
+                if severity_score < 20:
+                    st.info(f"✓ {recommendation}")
+                elif severity_score < 60:
+                    st.warning(f"⚠ {recommendation}")
+                else:
+                    st.error(f"🔴 {recommendation}")
                 
                 # Draw and display overlay
                 if len(predictions) > 0:
                     overlay = draw_polygons_on_image(image_resized.copy(), predictions)
                     st.image(overlay, caption="Crack predictions overlayed", use_column_width=True)
+                    
+                    # Store for PDF generation later
+                    st.session_state['last_result'] = {
+                        'image': overlay,
+                        'severity_score': severity_score,
+                        'coverage_percent': coverage_percent,
+                        'defect_count': len(predictions),
+                        'recommendation': recommendation
+                    }
+                    
+                    # Generate PDF download button
+                    st.divider()
+                    st.subheader("Export Report")
+                    
+                    pdf_buffer = generate_pdf_report(
+                        overlay,
+                        severity_score,
+                        coverage_percent,
+                        len(predictions),
+                        recommendation
+                    )
+                    
+                    st.download_button(
+                        label="Download PDF Report",
+                        data=pdf_buffer,
+                        file_name=f"aerius_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf",
+                        type="primary"
+                    )
                 else:
                     st.info("No crack predictions found in this image.")
                     st.image(image_resized, caption="Original image", use_column_width=True)

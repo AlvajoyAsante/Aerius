@@ -505,12 +505,10 @@ with tab_live:
     )
     
     # Initialize session state for live stream control
-    if "live_running" not in st.session_state:
-        st.session_state["live_running"] = False
-    if "live_frames_processed" not in st.session_state:
-        st.session_state["live_frames_processed"] = 0
-    if "live_start_time" not in st.session_state:
-        st.session_state["live_start_time"] = None
+    if "stream_connected" not in st.session_state:
+        st.session_state["stream_connected"] = False
+    if "last_frame" not in st.session_state:
+        st.session_state["last_frame"] = None
     
     # ====================================================================
     # LIVE STREAM CONTROLS
@@ -571,116 +569,120 @@ with tab_live:
             help="Local CV runs offline every frame; Roboflow requires API key."
         )
         
+        frame_display_ms = st.slider(
+            "Frame Display Duration (ms)",
+            min_value=100,
+            max_value=1000,
+            value=400,
+            step=50,
+            help="How long to display each frame before reading the next one (higher = smoother playback)."
+        )
+        
         # Force Local CV if Roboflow model not set
         if "xxxxx" in PUD_MODEL_ID and puddle_source == "Roboflow (if set)":
             st.info("ℹ Roboflow puddle model not configured; using Local CV.")
             puddle_source = "Local CV (offline)"
     
     # ====================================================================
-    # START/STOP BUTTONS
+    # STREAM CONTROLS
     # ====================================================================
     st.subheader("Stream Control")
-    col_start, col_stop = st.columns(2)
     
-    with col_start:
-        start_button = st.button("▶ Start Stream", type="primary", use_container_width=True)
+    col_connect, col_capture, col_clear = st.columns(3)
     
-    with col_stop:
-        stop_button = st.button("⏹ Stop Stream", use_container_width=True)
+    with col_connect:
+        connect_button = st.button("🔗 Connect to Stream", type="primary", use_container_width=True)
     
-    if start_button:
-        st.session_state["live_running"] = True
+    with col_capture:
+        capture_button = st.button("📸 Capture & Analyze Frame", use_container_width=True)
     
-    if stop_button:
-        st.session_state["live_running"] = False
+    with col_clear:
+        clear_button = st.button("🗑 Clear Results", use_container_width=True)
+    
+    if connect_button:
+        st.session_state["stream_connected"] = True
+        st.session_state["last_frame"] = None
+    
+    if clear_button:
+        st.session_state["stream_connected"] = False
+        st.session_state["last_frame"] = None
     
     # ====================================================================
-    # LIVE STREAM LOOP
+    # CAPTURE & ANALYZE FRAME
     # ====================================================================
-    if st.session_state["live_running"]:
-        # Create placeholders for real-time updates
+    if capture_button or (st.session_state.get("stream_connected") and "capture_triggered" in st.session_state):
+        # Initialize stream capture
         img_ph = st.empty()
         metrics_ph = st.empty()
         log_ph = st.empty()
         
-        # Initialize timing and counters
-        last_crack_time = 0.0
-        frames_processed = 0
-        loop_start = time.time()
-        last_frame_time = time.time()
-        
-        # Initialize crack predictions and severity
-        crack_predictions = []
-        crack_severity_score = 0.0
-        crack_coverage_pct = 0.0
-        
-        # ================================================================
-        # OPEN STREAM CAPTURE
-        # ================================================================
         try:
+            # Connect to stream
+            log_ph.info(f"🔗 Connecting to stream: {stream_url}")
             cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
-            opened = cap.isOpened()
             
-            if not opened:
+            if not cap.isOpened():
                 st.error(
-                    "❌ Could not open stream. Try:\n"
-                    "- `rtmp://localhost:1935/live/test` (RTMP)\n"
-                    "- `udp://127.0.0.1:5000` (UDP)"
+                    "❌ Could not open stream. Check:\n"
+                    "- Stream URL is correct: `rtmp://localhost:1935/live/test`\n"
+                    "- RTMP server is running\n"
+                    "- Stream source (OBS) is actively streaming"
                 )
+                cap.release()
             else:
-                log_ph.info(f"✓ Stream opened: {stream_url}")
+                log_ph.success(f"✓ Connected to stream: {stream_url}")
                 
-                target_period = 1.0 / sampling_fps  # Time between sampled frames
-                
-                # ============================================================
-                # MAIN LOOP: READ FRAMES & PROCESS
-                # ============================================================
-                while st.session_state["live_running"] and opened:
-                    loop_iter_start = time.time()
-                    
-                    # Read frame
+                # Try to read a frame with retries
+                frame = None
+                for attempt in range(5):
                     ret, frame = cap.read()
-                    if not ret:
-                        log_ph.warning("⚠ Stream ended or frame read failed. Stopping.")
-                        st.session_state["live_running"] = False
+                    if ret and frame is not None:
+                        log_ph.info(f"✓ Frame captured (attempt {attempt + 1})")
                         break
-                    
-                    # Downscale frame to resize_width (keep aspect ratio)
+                    log_ph.info(f"⏳ Attempting to read frame ({attempt + 1}/5)...")
+                    time.sleep(0.5)
+                
+                if frame is None:
+                    st.error("❌ Could not capture frame from stream. Try restarting OBS or checking the stream URL.")
+                    cap.release()
+                else:
+                    # Downscale frame
                     height, width = frame.shape[:2]
                     scale = resize_width / width
                     new_height = int(height * scale)
                     frame_resized = cv2.resize(frame, (resize_width, new_height), interpolation=cv2.INTER_LINEAR)
                     
                     frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
-                    frame_bgr = frame_resized  # Keep BGR for puddle overlay
+                    frame_bgr = frame_resized
+                    
+                    log_ph.info("🔍 Analyzing frame...")
                     
                     # ========================================================
-                    # PUDDLE DETECTION (every frame)
+                    # PUDDLE DETECTION
                     # ========================================================
                     puddle_mask = None
                     puddle_cov_pct = 0.0
                     
                     try:
                         if puddle_source == "Local CV (offline)":
-                            # Local CV fallback (always works, offline)
                             local_result = detect_puddles(frame_bgr, PUD_CFG)
                             puddle_mask = local_result["mask"]
                             puddle_cov_pct = float(local_result.get("coverage_pct", 0.0))
+                            log_ph.success(f"✓ Puddle detection complete: {puddle_cov_pct:.1f}% coverage")
                         else:
-                            # Roboflow puddle API
                             if api_key and "xxxxx" not in PUD_MODEL_ID:
                                 puddle_result = infer_puddles_mask_from_rgb(frame_rgb, api_key)
                                 puddle_mask = puddle_result["mask"]
                                 puddle_cov_pct = float(puddle_result["coverage_pct"])
                                 
                                 if puddle_result["error"]:
-                                    # Fallback to local CV if API fails
-                                    log_ph.warning(f"Puddle API failed; using Local CV: {puddle_result['error']}")
+                                    log_ph.warning(f"Puddle API failed; using Local CV")
                                     local_result = detect_puddles(frame_bgr, PUD_CFG)
                                     puddle_mask = local_result["mask"]
                                     puddle_cov_pct = float(local_result.get("coverage_pct", 0.0))
+                                else:
+                                    log_ph.success(f"✓ Puddle detection (Roboflow): {puddle_cov_pct:.1f}% coverage")
                             else:
-                                # No API key; use local CV
                                 local_result = detect_puddles(frame_bgr, PUD_CFG)
                                 puddle_mask = local_result["mask"]
                                 puddle_cov_pct = float(local_result.get("coverage_pct", 0.0))
@@ -689,45 +691,45 @@ with tab_live:
                         puddle_cov_pct = 0.0
                     
                     # ========================================================
-                    # CRACK DETECTION (every N seconds if enabled)
+                    # CRACK DETECTION
                     # ========================================================
+                    crack_predictions = []
+                    crack_severity_score = 0.0
+                    crack_coverage_pct = 0.0
+                    
                     if enable_cracks and api_key and "xxxxx" not in CRACK_MODEL_ID:
-                        current_time = time.time()
-                        if current_time - last_crack_time >= crack_period_s:
-                            try:
-                                # Save frame to temp file for Roboflow API
-                                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                                    cv2.imwrite(tmp.name, frame_resized)
-                                    temp_path = tmp.name
-                                
-                                # Call Roboflow API
-                                client = InferenceHTTPClient(
-                                    api_url="https://serverless.roboflow.com",
-                                    api_key=api_key
-                                )
-                                result = client.infer(
-                                    temp_path,
-                                    model_id=CRACK_MODEL_ID,
-                                    confidence=CRACK_CONF
-                                )
-                                
-                                crack_predictions = result.get("predictions", [])
-                                
-                                # Calculate crack severity (approximate for live tab)
-                                crack_severity_score, crack_coverage_pct, _ = calculate_severity(
-                                    crack_predictions,
-                                    image_width=frame_resized.shape[1],
-                                    image_height=frame_resized.shape[0]
-                                )
-                                
-                                last_crack_time = current_time
-                                
-                                # Clean up temp file
-                                if os.path.exists(temp_path):
-                                    os.remove(temp_path)
+                        try:
+                            log_ph.info("🔍 Running crack detection (Roboflow API)...")
                             
-                            except Exception as e:
-                                log_ph.warning(f"Crack API error: {str(e)}")
+                            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                                cv2.imwrite(tmp.name, frame_resized)
+                                temp_path = tmp.name
+                            
+                            client = InferenceHTTPClient(
+                                api_url="https://serverless.roboflow.com",
+                                api_key=api_key
+                            )
+                            result = client.infer(
+                                temp_path,
+                                model_id=CRACK_MODEL_ID,
+                                confidence=CRACK_CONF
+                            )
+                            
+                            crack_predictions = result.get("predictions", [])
+                            
+                            crack_severity_score, crack_coverage_pct, crack_recommendation = calculate_severity(
+                                crack_predictions,
+                                image_width=frame_resized.shape[1],
+                                image_height=frame_resized.shape[0]
+                            )
+                            
+                            log_ph.success(f"✓ Crack detection complete: {len(crack_predictions)} cracks detected")
+                            
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
+                        
+                        except Exception as e:
+                            log_ph.error(f"Crack detection error: {str(e)}")
                     
                     # ========================================================
                     # BUILD OVERLAY
@@ -741,21 +743,19 @@ with tab_live:
                             draw = ImageDraw.Draw(overlay_pil, "RGBA")
                             
                             for pred in crack_predictions:
-                                # Prioritize polygon format (instance segmentation)
                                 if "points" in pred:
                                     points = pred["points"]
                                     if isinstance(points, list) and len(points) > 0:
                                         coords = [(p.get("x", 0), p.get("y", 0)) for p in points]
                                         if len(coords) >= 3:
                                             draw.polygon(coords, fill=(0, 255, 0, 80), outline=(0, 255, 0, 255), width=2)
-                                # Fallback to bounding box
                                 elif "x" in pred and "y" in pred and "width" in pred and "height" in pred:
                                     x, y, w, h = pred["x"], pred["y"], pred["width"], pred["height"]
                                     draw.rectangle([x, y, x + w, y + h], fill=(0, 255, 0, 80), outline=(0, 255, 0, 255), width=2)
                             
                             overlay = np.array(overlay_pil)
                         
-                        # Blend puddle mask (convert to BGR first)
+                        # Blend puddle mask
                         if puddle_mask is not None:
                             overlay_bgr = cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
                             overlay_bgr = draw_puddles_overlay(overlay_bgr, puddle_mask, alpha=0.4)
@@ -766,49 +766,46 @@ with tab_live:
                         overlay = frame_rgb
                     
                     # ========================================================
-                    # COMPUTE METRICS & UPDATE DISPLAY
+                    # DISPLAY RESULTS
                     # ========================================================
                     puddle_severity = int(min(puddle_cov_pct * 5, 100))
                     combined_severity = int(round(0.6 * puddle_severity + 0.4 * crack_severity_score))
                     
-                    frames_processed += 1
-                    elapsed = time.time() - loop_start
-                    fps_processed = frames_processed / elapsed if elapsed > 0 else 0
+                    # Display image
+                    img_ph.image(overlay, channels="RGB", use_column_width=True, caption="Frame Analysis")
                     
-                    # Update image
-                    img_ph.image(overlay, channels="RGB", use_column_width=True)
+                    # Display metrics
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Puddle Coverage", f"{puddle_cov_pct:.1f}%")
+                    with col2:
+                        st.metric("Cracks Detected", len(crack_predictions))
+                    with col3:
+                        st.metric("Puddle Severity", f"{puddle_severity}/100")
+                    with col4:
+                        st.metric("Combined Severity", f"{combined_severity}/100")
                     
-                    # Update metrics
+                    # Display detailed metrics
+                    st.subheader("Detailed Analysis")
                     metrics_ph.write({
-                        "puddle_coverage_pct": f"{puddle_cov_pct:.1f}%",
-                        "cracks_detected": len(crack_predictions),
-                        "combined_severity": f"{combined_severity}/100",
-                        "processed_fps": f"{fps_processed:.2f}",
-                        "total_frames": frames_processed
+                        "Puddle Coverage %": f"{puddle_cov_pct:.1f}",
+                        "Puddle Severity Score": f"{puddle_severity}/100",
+                        "Cracks Detected": len(crack_predictions),
+                        "Crack Severity Score": f"{crack_severity_score:.1f}/100",
+                        "Combined Severity": f"{combined_severity}/100",
+                        "Frame Resolution": f"{frame_resized.shape[1]}x{frame_resized.shape[0]}"
                     })
                     
-                    # ========================================================
-                    # SLEEP TO RESPECT SAMPLING FPS
-                    # ========================================================
-                    loop_elapsed = time.time() - loop_iter_start
-                    sleep_time = max(0, target_period - loop_elapsed)
-                    if sleep_time > 0:
-                        time.sleep(sleep_time)
+                    log_ph.success("✓ Analysis complete!")
+                    
+                    cap.release()
         
         except Exception as e:
-            st.error(f"❌ Stream error: {str(e)}")
-        
-        finally:
+            st.error(f"❌ Error: {str(e)}")
             try:
                 cap.release()
             except:
                 pass
-        
-        # ====================================================================
-        # CLEANUP & FINAL MESSAGE
-        # ====================================================================
-        log_ph.info("⏹ Stream stopped.")
-        st.session_state["live_running"] = False
 
 
 # ============================================================================

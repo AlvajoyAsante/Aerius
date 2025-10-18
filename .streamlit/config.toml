@@ -1,6 +1,7 @@
 [theme]
-base="dark"
-primaryColor="#6EE7B7"
-
-[client]
-showErrorDetails=true
+base = "dark"
+primaryColor = "#60A5FA"
+backgroundColor = "#0B1220"
+secondaryBackgroundColor = "#0F172A"
+textColor = "#E6F1FF"
+font = "sans serif"

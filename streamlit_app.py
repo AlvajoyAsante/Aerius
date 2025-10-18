@@ -33,9 +33,20 @@ from core.cracks_api import ROBOFLOW_MODEL_ID, ROBOFLOW_CONFIDENCE, TARGET_RESIZ
 # PAGE CONFIG & SECRETS
 # ============================================================================
 
-st.set_page_config(page_title="Aerius", layout="wide")
+st.set_page_config(page_title="Aerius", page_icon=None, layout="wide")
 
-st.title("🏗️ Aerius")
+st.markdown(
+    """
+    <style>
+      /* Slightly brighten headings to match the light-blue accent */
+      h1, h2, h3 { color: #E6F1FF !important; }
+      /* Buttons already inherit primaryColor; no change needed */
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+st.markdown("## Aerius")
 st.caption(
     "Detect cracks and puddles in buildings/structures: local CV for puddles + Roboflow API for cracks → "
     "temporal merge, scoring (0–100), overlays, and 1-page PDF reports."
@@ -54,13 +65,13 @@ except (FileNotFoundError, KeyError):
 # ============================================================================
 
 with st.sidebar:
-    st.header("⚙️ Configuration")
+    st.header("Configuration")
     
     # API key status
     if api_key and api_key.strip():
-        st.success("✓ ROBOFLOW_API_KEY is set")
+        st.success("ROBOFLOW_API_KEY is set")
     else:
-        st.warning("⚠️ ROBOFLOW_API_KEY not set. Set in `.streamlit/secrets.toml` or environment.")
+        st.warning("ROBOFLOW_API_KEY not set. Set in `.streamlit/secrets.toml` or environment.")
     
     st.divider()
     
@@ -125,7 +136,7 @@ def resize_image_for_inference(image: Image.Image, target_width: int) -> Image.I
 # MAIN TABS
 # ============================================================================
 
-tab_image, tab_video = st.tabs(["📷 Image Crack Test (Roboflow)", "🎬 Video Scaffold"])
+tab_image, tab_video = st.tabs(["Image Crack Test (Roboflow)", "Video Scaffold"])
 
 
 # ============================================================================
@@ -137,10 +148,10 @@ with tab_image:
     
     # Check for required config
     if not api_key or not api_key.strip():
-        st.error("❌ ROBOFLOW_API_KEY not set. Please configure in `.streamlit/secrets.toml` or environment.")
+        st.error("ROBOFLOW_API_KEY not set. Please configure in `.streamlit/secrets.toml` or environment.")
     elif "xxxxx" in ROBOFLOW_MODEL_ID:
         st.error(
-            "❌ ROBOFLOW_MODEL_ID contains placeholder 'xxxxx'. "
+            "ROBOFLOW_MODEL_ID contains placeholder 'xxxxx'. "
             "Update `core/cracks_api.py` with your actual model ID from Roboflow."
         )
     else:
@@ -167,7 +178,7 @@ with tab_image:
         
         with col2:
             st.subheader("Run Inference")
-            run_button = st.button("🚀 Run Crack Inference", type="primary")
+            run_button = st.button("Run Crack Inference", type="primary")
         
         # Process image if uploaded and button clicked
         if uploaded_file and run_button:
@@ -197,7 +208,7 @@ with tab_image:
                     )
                 
                 # Display results
-                st.success("✓ Inference complete!")
+                st.success("Inference complete!")
                 
                 predictions = result.get("predictions", [])
                 st.write(f"**Predictions found:** {len(predictions)}")
@@ -224,7 +235,7 @@ with tab_image:
                     st.image(image_resized, caption="Original image", use_column_width=True)
                 
             except Exception as e:
-                st.error(f"❌ Error during inference: {str(e)}")
+                st.error(f"Error during inference: {str(e)}")
             finally:
                 # Clean up temp file
                 if os.path.exists(temp_path):

@@ -51,23 +51,23 @@ def generate_pdf_report(
     # Top section: Title
     c.setFont("Helvetica-Bold", 24)
     c.setFillColor(dark_blue)
-    c.drawString(0.5 * inch, page_height - 0.7 * inch, "Aerius - Defect Report")
+    c.drawString(0.5 * inch, page_height - 0.6 * inch, "Aerius - Defect Report")
     
-    # Date and time
-    c.setFont("Helvetica", 10)
+    # Date and time (below title)
+    c.setFont("Helvetica", 9)
     c.setFillColor(HexColor("#666666"))
     analysis_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.drawString(0.5 * inch, page_height - 1.0 * inch, f"Analysis Date: {analysis_date}")
+    c.drawString(0.5 * inch, page_height - 0.9 * inch, f"Analysis Date: {analysis_date}")
     
-    # Horizontal line
+    # Horizontal line (below date)
     c.setStrokeColor(light_blue)
     c.setLineWidth(2)
-    c.line(0.5 * inch, page_height - 1.15 * inch, page_width - 0.5 * inch, page_height - 1.15 * inch)
+    c.line(0.5 * inch, page_height - 1.05 * inch, page_width - 0.5 * inch, page_height - 1.05 * inch)
     
-    # Metrics boxes (3 columns)
-    metrics_y = page_height - 1.5 * inch
+    # Metrics boxes (3 columns) - positioned below the line with more spacing
+    metrics_y = page_height - 2.0 * inch
     box_width = (page_width - 1.5 * inch) / 3 - 0.1 * inch
-    box_height = 0.8 * inch
+    box_height = 0.75 * inch
     
     # Helper function to draw metric box
     def draw_metric_box(x, y, label, value, unit=""):
@@ -75,23 +75,23 @@ def generate_pdf_report(
         c.setLineWidth(1)
         c.rect(x, y, box_width, box_height, fill=0)
         
-        c.setFont("Helvetica", 9)
+        c.setFont("Helvetica", 8)
         c.setFillColor(HexColor("#999999"))
-        c.drawString(x + 0.1 * inch, y + box_height - 0.25 * inch, label)
+        c.drawString(x + 0.08 * inch, y + box_height - 0.2 * inch, label)
         
-        c.setFont("Helvetica-Bold", 16)
+        c.setFont("Helvetica-Bold", 14)
         c.setFillColor(light_blue)
         value_text = f"{value}{unit}"
-        c.drawString(x + 0.1 * inch, y + 0.2 * inch, value_text)
+        c.drawString(x + 0.08 * inch, y + 0.2 * inch, value_text)
     
     draw_metric_box(0.5 * inch, metrics_y, "Defects Detected", defect_count)
     draw_metric_box(0.5 * inch + box_width + 0.2 * inch, metrics_y, "Coverage Area", f"{coverage_percent:.1f}", "%")
     draw_metric_box(0.5 * inch + 2 * (box_width + 0.2 * inch), metrics_y, "Severity Score", f"{severity_score}", "/100")
     
-    # Image section
-    image_y = metrics_y - 3.5 * inch
+    # Image section - positioned well below metrics
+    image_y = metrics_y - 3.0 * inch
     image_width = page_width - 1.0 * inch
-    image_height = 2.5 * inch
+    image_height = 2.2 * inch
     
     # Resize image to fit
     aspect_ratio = image.width / image.height
@@ -117,7 +117,7 @@ def generate_pdf_report(
             os.remove(temp_image_path)
     
     # Recommendation section
-    rec_y = image_y - image_height - 0.4 * inch
+    rec_y = image_y - image_height - 0.3 * inch
     
     c.setFont("Helvetica-Bold", 12)
     c.setFillColor(dark_blue)

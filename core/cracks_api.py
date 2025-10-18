@@ -11,7 +11,6 @@ TODO: Implement response parsing (segmentation masks)
 TODO: Implement cache storage by video hash (see cache.py)
 TODO: Handle API rate limits and retries
 """
-
 # --- Roboflow Inference config (constants only; no logic) ---
 ROBOFLOW_MODEL_ID = "concrete-crack-ver.1/2" # crack detection model
 ROBOFLOW_CONFIDENCE = 0.35           # default confidence; will tune later

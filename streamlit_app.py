@@ -126,6 +126,41 @@ def draw_polygons_on_image(image: Image.Image, predictions: list) -> Image.Image
     return image
 
 
+def draw_bounding_boxes_on_image(image: Image.Image, predictions: list) -> Image.Image:
+    """
+    Draw prediction segmentation masks or bounding boxes on a PIL Image.
+    
+    Prioritizes polygon points (instance segmentation) for accurate crack visualization.
+    Falls back to bounding boxes if polygon points aren't available.
+    """
+    if not predictions:
+        return image
+    
+    draw = ImageDraw.Draw(image, "RGBA")
+    for pred in predictions:
+        # Prioritize polygon format (instance segmentation - most accurate for cracks)
+        if "points" in pred:
+            points = pred["points"]
+            if isinstance(points, list) and len(points) > 0:
+                coords = [(p.get("x", 0), p.get("y", 0)) for p in points]
+                if len(coords) >= 3:
+                    # Draw filled polygon with semi-transparent color
+                    draw.polygon(coords, fill=(0, 255, 0, 80), outline=(0, 255, 0, 255), width=2)
+        # Fallback to bounding box format if polygon points aren't available
+        elif "x" in pred and "y" in pred and "width" in pred and "height" in pred:
+            x = pred["x"]
+            y = pred["y"]
+            width = pred["width"]
+            height = pred["height"]
+            
+            # Draw bounding box rectangle
+            x0, y0 = x, y
+            x1, y1 = x + width, y + height
+            draw.rectangle([x0, y0, x1, y1], fill=(0, 255, 0, 80), outline=(0, 255, 0, 255), width=2)
+    
+    return image
+
+
 # ============================================================================
 # HELPER: RESIZE IMAGE FOR INFERENCE
 # ============================================================================
@@ -185,14 +220,14 @@ with tab_image:
         
         with col2:
             st.subheader("Run Inference")
-            run_button = st.button("Run Crack Inference", type="primary")
+            run_button = st.button("Run Diagnosis", type="primary")
         
         # Get image from session state
         current_image = st.session_state.get('current_image_file')
         
         # Show message if image is loaded
         if current_image:
-            st.success("Image loaded. Click 'Run Crack Inference' to analyze.")
+            st.success("Image loaded. Click 'Run Diagnosis' to analyze.")
         
         # Process image if uploaded and button clicked
         if current_image and run_button:
@@ -341,9 +376,9 @@ with tab_image:
             # ================================================================
             # BUILD COMBINED OVERLAY
             # ================================================================
-            # Draw crack polygons first
+            # Draw crack polygons/bounding boxes first
             if len(crack_predictions) > 0:
-                overlay_image = draw_polygons_on_image(image_resized.copy(), crack_predictions)
+                overlay_image = draw_bounding_boxes_on_image(image_resized.copy(), crack_predictions)
                 overlay_np = np.array(overlay_image)
                 # Convert to BGR for puddle overlay function
                 combined_overlay = draw_puddles_overlay(

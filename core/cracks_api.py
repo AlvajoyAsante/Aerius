@@ -13,7 +13,7 @@ TODO: Handle API rate limits and retries
 """
 
 # --- Roboflow Inference config (constants only; no logic) ---
-ROBOFLOW_MODEL_ID = "crack-bphdr-q4ns2/1" # crack detection model
+ROBOFLOW_MODEL_ID = "concrete-crack-ver.1/2" # crack detection model
 ROBOFLOW_CONFIDENCE = 0.35           # default confidence; will tune later
 TARGET_RESIZE_WIDTH = 640            # frames sent to API
 BATCH_SIZE = 15                      # images per request

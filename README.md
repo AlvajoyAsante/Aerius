@@ -1,21 +1,21 @@
-# Aerius - Crack & Puddle Detection Tool
+# Aerius - Crack & Water Damage Detection Tool
 
-Aerius is a Streamlit application that analyzes phone or drone videos to detect and report cracks and puddles in buildings, walls, and other structures.
+Aerius is a Streamlit application that analyzes phone or drone videos to detect and report cracks and water damage in buildings, walls, and other structures.
 
 ## Project Overview
 
 **Aerius** leverages a hybrid approach to structural defect detection:
 - **Roboflow API (Cracks)**: AI-powered crack detection using instance segmentation
-- **Roboflow API (Puddles)**: AI-powered puddle detection (if model is configured), with local CV fallback
+- **Roboflow API (Water Damage)**: AI-powered water damage detection (if model is configured), with local CV fallback
 - **Temporal Merge**: Combines results across frames for consistent detection
-- **Intelligent Scoring**: Generates a 0–100 severity score based on area, depth, and persistence (60% puddle weight + 40% crack weight)
-- **Visual Overlays**: Renders annotated frames with color-coded defects (green for cracks, blue for puddles)
+- **Intelligent Scoring**: Generates a 0–100 severity score based on area, depth, and persistence (60% water damage weight + 40% crack weight)
+- **Visual Overlays**: Renders annotated frames with color-coded defects (green for cracks, blue for water damage)
 - **PDF Report**: Exports a professional one-page PDF summary with key metrics
 
 ## Features
 
-- **Dual-API Detection**: Cracks + Puddles via Roboflow APIs
-- **Graceful Fallback**: If puddle API not configured, uses local OpenCV heuristics
+- **Dual-API Detection**: Cracks + Water Damage via Roboflow APIs
+- **Graceful Fallback**: If water damage API not configured, uses local OpenCV heuristics
 - **API Result Caching**: Caches Roboflow responses by video hash (no redundant calls)
 - **Batch Processing**: Handles up to 100 frames per batch
 - **Cross-Platform**: Supports macOS, Linux, and Windows
@@ -67,8 +67,8 @@ Aerius is a Streamlit application that analyzes phone or drone videos to detect 
 - Update `ROBOFLOW_MODEL_ID` in `core/cracks_api.py` with your crack detection model ID from Roboflow
 
 **Puddle Model** (optional):
-- Update `PUDDLE_ROBOFLOW_MODEL_ID` in `core/puddle_api.py` with your puddle detection model ID
-- If not configured, the app will fall back to local OpenCV-based puddle detection
+- Update `PUDDLE_ROBOFLOW_MODEL_ID` in `core/puddle_api.py` with your water damage detection model ID
+- If not configured, the app will fall back to local OpenCV-based water damage detection
 
 ### Run the App
 
@@ -83,7 +83,7 @@ Aerius is a Streamlit application that analyzes phone or drone videos to detect 
    The app will open at `http://localhost:8501` by default.
 
 4. **Using the app:**
-   - **Image Test (Cracks + Puddles)**: Upload an image and click "Run Crack Inference" to see cracks (green overlay) and puddles (blue overlay) detected in one combined view with combined severity score.
+   - **Image Test (Cracks + Water Damage)**: Upload an image and click "Run Crack Inference" to see cracks (green overlay) and water damage (blue overlay) detected in one combined view with combined severity score.
    - **Video Scaffold**: Upload a short video to see metadata (FPS, frame count, duration) and the first frame preview.
 
    *(Optional for remote access):*
@@ -103,7 +103,7 @@ Before running the full app, test the Roboflow API integration directly:
 
 2. **Important**: Ensure the model IDs are set:
    - Crack model: Replace `ROBOFLOW_MODEL_ID = "crack-xxxxx/1"` in `core/cracks_api.py` with your exact model ID
-   - Puddle model (optional): Replace `PUDDLE_ROBOFLOW_MODEL_ID = "puddle-xxxxx/1"` in `core/puddle_api.py` with your model ID (find it at Roboflow → Hosted API section)
+   - Water Damage model (optional): Replace `PUDDLE_ROBOFLOW_MODEL_ID = "water-damage-xxxxx/1"` in `core/puddle_api.py` with your model ID (find it at Roboflow → Hosted API section)
 
 3. Run the CLI test script:
    ```bash
@@ -115,7 +115,7 @@ Before running the full app, test the Roboflow API integration directly:
 
 ## Notes
 
-- **Puddles-Only Mode**: Run offline by disabling the Roboflow API (local CV only)
+- **Water Damage-Only Mode**: Run offline by disabling the Roboflow API (local CV only)
 - **API Caching**: Results are cached by video hash in `samples/fixtures/` to avoid redundant API calls
 - **Batch Limits**: Each analysis processes a maximum of 100 frames per batch for performance
 - **Environment Variables**: Load API keys from `.env` via `python-dotenv` or Streamlit secrets

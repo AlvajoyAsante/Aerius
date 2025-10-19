@@ -21,6 +21,8 @@ import os
 import io
 import time
 import tempfile
+import base64
+from pathlib import Path
 from datetime import datetime
 import streamlit as st
 import cv2
@@ -43,6 +45,29 @@ except Exception:
 
 
 # ============================================================================
+# BRAND HEADER HELPER
+# ============================================================================
+
+def _get_brand_header_html(title_text: str = "Aerius", icon_path: str = "assets/drone_icon.png", icon_em: float = 1.3):
+    """
+    Return HTML for the brand line with an inline PNG icon next to the title.
+    icon_em controls the icon height relative to the heading font-size (keeps size equal to the old emoji).
+    """
+    icon_file = Path(__file__).parent / icon_path
+    if icon_file.exists():
+        b64 = base64.b64encode(icon_file.read_bytes()).decode("utf-8")
+        # Return clean HTML only (styles defined in global CSS)
+        html = f"""<div class="aerius-brand" style="--icon-em: {icon_em}em;">
+          <img src="data:image/png;base64,{b64}" alt="Aerius drone icon" />
+          <div class="brand-text">Aerius</div>
+        </div>"""
+        return html
+    else:
+        # Fallback to text if the file is missing
+        return '<div class="brand-text">Aerius</div>'
+
+
+# ============================================================================
 # PAGE CONFIG & SECRETS
 # ============================================================================
 
@@ -52,6 +77,28 @@ st.set_page_config(page_title="Aerius", page_icon="🔍", layout="wide")
 st.markdown(
     """
     <style>
+        /* Brand header styling */
+        .aerius-brand {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            justify-content: center;
+            margin-bottom: 10px;
+        }
+        .aerius-brand img {
+            height: var(--icon-em, 1.3em);
+            width: auto;
+            vertical-align: middle;
+            display: inline-block;
+        }
+        .aerius-brand .brand-text {
+            line-height: 1;
+            margin: 0;
+            font-size: 2.5em;
+            font-weight: 700;
+            color: #60A5FA;
+        }
+        
         /* Hero section styling */
         .hero-header {
             background: linear-gradient(135deg, #0B1220 0%, #1a2f4f 100%);
@@ -104,8 +151,14 @@ st.markdown(
             margin: 30px 0;
         }
         
-        h1, h2, h3 { 
+        h1, h2 { 
             color: #0B1220 !important; 
+        }
+        
+        /* Sidebar heading styling - make them white for contrast */
+        [data-testid="sidebar"] h3,
+        [data-testid="sidebar"] h3 * {
+            color: #FFFFFF !important;
         }
     </style>
     """,
@@ -115,13 +168,13 @@ st.markdown(
 # Hero Section
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    st.markdown("""
-        <div class="hero-header">
-            <div class="hero-title">🔍 Aerius</div>
+    brand_html = _get_brand_header_html("Aerius", "assets/drone_icon.png", icon_em=1.3)
+    hero_html = """<div class="hero-header">
+""" + brand_html + """
             <div class="hero-subtitle">Infrastructure Inspection Platform</div>
             <div class="hero-caption">Intelligent detection for building assessment & maintenance</div>
-        </div>
-    """, unsafe_allow_html=True)
+        </div>"""
+    st.markdown(hero_html, unsafe_allow_html=True)
 
 # Read API key from secrets or environment
 api_key = None
@@ -136,7 +189,7 @@ except (FileNotFoundError, KeyError):
 # ============================================================================
 
 with st.sidebar:
-    st.markdown("### System Configuration")
+    st.markdown('<div style="font-size: 1.3em; font-weight: 600; color: #FFFFFF !important; margin-bottom: 10px;">System Configuration</div>', unsafe_allow_html=True)
     
     # API key status with better styling
     st.markdown("**⚙️ API & Services**")
@@ -171,7 +224,7 @@ with st.sidebar:
     st.divider()
     
     # About section
-    st.markdown("### About")
+    st.markdown('<div style="font-size: 1.3em; font-weight: 600; color: #FFFFFF !important; margin-bottom: 10px;">About</div>', unsafe_allow_html=True)
     st.caption("""
     **Aerius** is an intelligent infrastructure inspection platform that uses 
     computer vision and deep learning to detect cracks and water damage in buildings 

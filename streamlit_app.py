@@ -11,8 +11,35 @@ Current features:
 2. Video Scaffold: Upload videos, display metadata and first frame
 
 TODO: Integrate core/ingest.sample_frames for video frame extraction
-TODO: Batch Roboflow crack & puddle detection
-TODO: Implement temporal tracking and overlay rendering
+TODO: Batch Roboflow crack & puddle    col_start, col_stop, col_export = st.columns(3)
+    
+    with col_start:
+        start_button = st.button("▶ Start Capture", type="primary", use_container_width=True)
+    
+    with col_stop:
+        stop_button = st.button("⏹ Stop Capture", use_container_width=True)
+    
+    with col_export:
+        can_export = (not st.session_state.get("stream_running", False)) and len(st.session_state.get("frame_analysis_results", [])) > 0
+        export_button = st.button("📄 Export PDF", disabled=not can_export, use_container_width=True)
+        # Export only enabled if stream is stopped but has captured frames
+        can_export = (not st.session_state.get("stream_running", False)) and len(st.session_state.get("frame_analysis_results", [])) > 0
+        export_button = st.button("📄 Export PDF", disabled=not can_export, use_container_width=True)
+    
+    if start_button:
+        st.session_state["stream_running"] = True
+        st.session_state["frame_analysis_results"] = []  # Reset results
+        st.session_state["capture_start_time"] = time.time()
+        st.session_state["frames_captured"] = 0
+        st.rerun()
+    
+    if stop_button:
+        st.session_state["stream_running"] = False
+        st.rerun()  # One final rerun to show export button enabled and results retained
+    
+    if export_button:
+        st.session_state["show_pdf_export"] = True
+        st.rerun()lement temporal tracking and overlay rendering
 TODO: Wire PDF report generation in core/report.py
 """
 
@@ -505,10 +532,10 @@ with tab_live:
     )
     
     # Initialize session state for live stream control
-    if "stream_connected" not in st.session_state:
-        st.session_state["stream_connected"] = False
-    if "last_frame" not in st.session_state:
-        st.session_state["last_frame"] = None
+    if "stream_running" not in st.session_state:
+        st.session_state["stream_running"] = False
+    if "frame_analysis_results" not in st.session_state:
+        st.session_state["frame_analysis_results"] = []
     
     # ====================================================================
     # LIVE STREAM CONTROLS
@@ -588,224 +615,421 @@ with tab_live:
     # ====================================================================
     st.subheader("Stream Control")
     
-    col_connect, col_capture, col_clear = st.columns(3)
+    col_start, col_stop, col_export = st.columns(3)
     
-    with col_connect:
-        connect_button = st.button("🔗 Connect to Stream", type="primary", use_container_width=True)
+    with col_start:
+        start_button = st.button("▶ Start Capture", type="primary", use_container_width=True)
     
-    with col_capture:
-        capture_button = st.button("📸 Capture & Analyze Frame", use_container_width=True)
+    with col_stop:
+        stop_button = st.button("⏹ Stop Capture", use_container_width=True)
     
-    with col_clear:
-        clear_button = st.button("🗑 Clear Results", use_container_width=True)
+    with col_export:
+        can_export = (not st.session_state.get("stream_running", False)) and len(st.session_state.get("frame_analysis_results", [])) > 0
+        export_button = st.button("📄 Export PDF", disabled=not can_export, use_container_width=True)
     
-    if connect_button:
-        st.session_state["stream_connected"] = True
-        st.session_state["last_frame"] = None
+    if start_button:
+        st.session_state["stream_running"] = True
+        st.session_state["frame_analysis_results"] = []  # Reset results
+        st.session_state["capture_start_time"] = time.time()
+        st.session_state["frames_captured"] = 0
+        st.rerun()
     
-    if clear_button:
-        st.session_state["stream_connected"] = False
-        st.session_state["last_frame"] = None
+    if stop_button:
+        st.session_state["stream_running"] = False
+        st.rerun()  # One final rerun to show export button enabled and results retained
     
     # ====================================================================
-    # CAPTURE & ANALYZE FRAME
+    # CONTINUOUS FRAME CAPTURE & ANALYSIS (ONE FRAME PER RERUN)
     # ====================================================================
-    if capture_button or (st.session_state.get("stream_connected") and "capture_triggered" in st.session_state):
-        # Initialize stream capture
-        img_ph = st.empty()
-        metrics_ph = st.empty()
-        log_ph = st.empty()
+    if st.session_state.get("stream_running", False):
+        # Create placeholders for live updates
+        preview_ph = st.empty()
+        progress_ph = st.empty()
+        status_ph = st.empty()
+        
+        # Get session data
+        frame_results = st.session_state.get("frame_analysis_results", [])
+        capture_start_time = st.session_state.get("capture_start_time", time.time())
+        frames_captured = st.session_state.get("frames_captured", 0)
+        capture_interval = 2  # Seconds between frame captures
+        current_time = time.time()
+        elapsed = current_time - capture_start_time
         
         try:
-            # Connect to stream
-            log_ph.info(f"🔗 Connecting to stream: {stream_url}")
-            cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
+            # Check if we should capture a frame
+            should_capture = (frames_captured == 0) or (elapsed >= (frames_captured * capture_interval))
             
-            if not cap.isOpened():
-                st.error(
-                    "❌ Could not open stream. Check:\n"
-                    "- Stream URL is correct: `rtmp://localhost:1935/live/test`\n"
-                    "- RTMP server is running\n"
-                    "- Stream source (OBS) is actively streaming"
-                )
-                cap.release()
-            else:
-                log_ph.success(f"✓ Connected to stream: {stream_url}")
+            if should_capture:
+                # Connect to RTMP stream
+                status_ph.info(f"🔗 Connecting to stream and reading frame {frames_captured + 1}...")
+                cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
                 
-                # Try to read a frame with retries
-                frame = None
-                for attempt in range(5):
-                    ret, frame = cap.read()
-                    if ret and frame is not None:
-                        log_ph.info(f"✓ Frame captured (attempt {attempt + 1})")
-                        break
-                    log_ph.info(f"⏳ Attempting to read frame ({attempt + 1}/5)...")
-                    time.sleep(0.5)
-                
-                if frame is None:
-                    st.error("❌ Could not capture frame from stream. Try restarting OBS or checking the stream URL.")
-                    cap.release()
+                if not cap.isOpened():
+                    st.error(
+                        "❌ Could not open stream. Verify:\n"
+                        "- Stream URL: `rtmp://localhost:1935/live/test`\n"
+                        "- RTMP server is running\n"
+                        "- OBS/stream source is streaming"
+                    )
+                    st.session_state["stream_running"] = False
                 else:
-                    # Downscale frame
-                    height, width = frame.shape[:2]
-                    scale = resize_width / width
-                    new_height = int(height * scale)
-                    frame_resized = cv2.resize(frame, (resize_width, new_height), interpolation=cv2.INTER_LINEAR)
+                    # Read frame with retries
+                    ret, frame = None, None
+                    for attempt in range(3):
+                        ret, frame = cap.read()
+                        if ret and frame is not None:
+                            break
+                        time.sleep(0.2)
                     
-                    frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
-                    frame_bgr = frame_resized
+                    cap.release()
                     
-                    log_ph.info("🔍 Analyzing frame...")
-                    
-                    # ========================================================
-                    # PUDDLE DETECTION
-                    # ========================================================
-                    puddle_mask = None
-                    puddle_cov_pct = 0.0
-                    
-                    try:
-                        if puddle_source == "Local CV (offline)":
-                            local_result = detect_puddles(frame_bgr, PUD_CFG)
-                            puddle_mask = local_result["mask"]
-                            puddle_cov_pct = float(local_result.get("coverage_pct", 0.0))
-                            log_ph.success(f"✓ Puddle detection complete: {puddle_cov_pct:.1f}% coverage")
-                        else:
-                            if api_key and "xxxxx" not in PUD_MODEL_ID:
-                                puddle_result = infer_puddles_mask_from_rgb(frame_rgb, api_key)
-                                puddle_mask = puddle_result["mask"]
-                                puddle_cov_pct = float(puddle_result["coverage_pct"])
-                                
-                                if puddle_result["error"]:
-                                    log_ph.warning(f"Puddle API failed; using Local CV")
-                                    local_result = detect_puddles(frame_bgr, PUD_CFG)
-                                    puddle_mask = local_result["mask"]
-                                    puddle_cov_pct = float(local_result.get("coverage_pct", 0.0))
-                                else:
-                                    log_ph.success(f"✓ Puddle detection (Roboflow): {puddle_cov_pct:.1f}% coverage")
-                            else:
+                    if not ret or frame is None:
+                        status_ph.warning("⚠ Failed to read frame from stream.")
+                        st.session_state["stream_running"] = False
+                    else:
+                        frames_captured += 1
+                        frame_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        # Downscale frame
+                        height, width = frame.shape[:2]
+                        scale = resize_width / width
+                        new_height = int(height * scale)
+                        frame_resized = cv2.resize(frame, (resize_width, new_height), interpolation=cv2.INTER_LINEAR)
+                        
+                        frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+                        frame_bgr = frame_resized
+                        
+                        # ====================================================
+                        # PUDDLE DETECTION
+                        # ====================================================
+                        puddle_mask = None
+                        puddle_cov_pct = 0.0
+                        
+                        try:
+                            if puddle_source == "Local CV (offline)":
                                 local_result = detect_puddles(frame_bgr, PUD_CFG)
                                 puddle_mask = local_result["mask"]
                                 puddle_cov_pct = float(local_result.get("coverage_pct", 0.0))
-                    except Exception as e:
-                        log_ph.error(f"Puddle detection error: {str(e)}")
-                        puddle_cov_pct = 0.0
-                    
-                    # ========================================================
-                    # CRACK DETECTION
-                    # ========================================================
-                    crack_predictions = []
-                    crack_severity_score = 0.0
-                    crack_coverage_pct = 0.0
-                    
-                    if enable_cracks and api_key and "xxxxx" not in CRACK_MODEL_ID:
+                            else:
+                                if api_key and "xxxxx" not in PUD_MODEL_ID:
+                                    puddle_result = infer_puddles_mask_from_rgb(frame_rgb, api_key)
+                                    puddle_mask = puddle_result["mask"]
+                                    puddle_cov_pct = float(puddle_result["coverage_pct"])
+                                    if puddle_result["error"]:
+                                        local_result = detect_puddles(frame_bgr, PUD_CFG)
+                                        puddle_mask = local_result["mask"]
+                                        puddle_cov_pct = float(local_result.get("coverage_pct", 0.0))
+                                else:
+                                    local_result = detect_puddles(frame_bgr, PUD_CFG)
+                                    puddle_mask = local_result["mask"]
+                                    puddle_cov_pct = float(local_result.get("coverage_pct", 0.0))
+                        except Exception as e:
+                            status_ph.error(f"Puddle detection error: {str(e)}")
+                            puddle_cov_pct = 0.0
+                        
+                        # ====================================================
+                        # CRACK DETECTION
+                        # ====================================================
+                        crack_predictions = []
+                        crack_severity_score = 0.0
+                        crack_coverage_pct = 0.0
+                        
+                        if enable_cracks and api_key and "xxxxx" not in CRACK_MODEL_ID:
+                            try:
+                                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                                    cv2.imwrite(tmp.name, frame_resized)
+                                    temp_path = tmp.name
+                                
+                                client = InferenceHTTPClient(
+                                    api_url="https://serverless.roboflow.com",
+                                    api_key=api_key
+                                )
+                                result = client.infer(
+                                    temp_path,
+                                    model_id=CRACK_MODEL_ID,
+                                    confidence=CRACK_CONF
+                                )
+                                
+                                crack_predictions = result.get("predictions", [])
+                                crack_severity_score, crack_coverage_pct, _ = calculate_severity(
+                                    crack_predictions,
+                                    image_width=frame_resized.shape[1],
+                                    image_height=frame_resized.shape[0]
+                                )
+                                
+                                if os.path.exists(temp_path):
+                                    os.remove(temp_path)
+                            
+                            except Exception as e:
+                                status_ph.error(f"Crack detection error: {str(e)}")
+                        
+                        # ====================================================
+                        # BUILD OVERLAY
+                        # ====================================================
                         try:
-                            log_ph.info("🔍 Running crack detection (Roboflow API)...")
+                            overlay = frame_rgb.copy()
                             
-                            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                                cv2.imwrite(tmp.name, frame_resized)
-                                temp_path = tmp.name
+                            if crack_predictions:
+                                overlay_pil = Image.fromarray(overlay)
+                                draw = ImageDraw.Draw(overlay_pil, "RGBA")
+                                
+                                for pred in crack_predictions:
+                                    if "points" in pred:
+                                        points = pred["points"]
+                                        if isinstance(points, list) and len(points) > 0:
+                                            coords = [(p.get("x", 0), p.get("y", 0)) for p in points]
+                                            if len(coords) >= 3:
+                                                draw.polygon(coords, fill=(0, 255, 0, 80), outline=(0, 255, 0, 255), width=2)
+                                    elif "x" in pred and "y" in pred and "width" in pred and "height" in pred:
+                                        x, y, w, h = pred["x"], pred["y"], pred["width"], pred["height"]
+                                        draw.rectangle([x, y, x + w, y + h], fill=(0, 255, 0, 80), outline=(0, 255, 0, 255), width=2)
+                                
+                                overlay = np.array(overlay_pil)
                             
-                            client = InferenceHTTPClient(
-                                api_url="https://serverless.roboflow.com",
-                                api_key=api_key
-                            )
-                            result = client.infer(
-                                temp_path,
-                                model_id=CRACK_MODEL_ID,
-                                confidence=CRACK_CONF
-                            )
-                            
-                            crack_predictions = result.get("predictions", [])
-                            
-                            crack_severity_score, crack_coverage_pct, crack_recommendation = calculate_severity(
-                                crack_predictions,
-                                image_width=frame_resized.shape[1],
-                                image_height=frame_resized.shape[0]
-                            )
-                            
-                            log_ph.success(f"✓ Crack detection complete: {len(crack_predictions)} cracks detected")
-                            
-                            if os.path.exists(temp_path):
-                                os.remove(temp_path)
+                            if puddle_mask is not None:
+                                overlay_bgr = cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
+                                overlay_bgr = draw_puddles_overlay(overlay_bgr, puddle_mask, alpha=0.4)
+                                overlay = cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB)
                         
                         except Exception as e:
-                            log_ph.error(f"Crack detection error: {str(e)}")
-                    
-                    # ========================================================
-                    # BUILD OVERLAY
-                    # ========================================================
-                    try:
-                        overlay = frame_rgb.copy()
+                            status_ph.error(f"Overlay error: {str(e)}")
+                            overlay = frame_rgb
                         
-                        # Draw crack polygons if available
-                        if crack_predictions:
-                            overlay_pil = Image.fromarray(overlay)
-                            draw = ImageDraw.Draw(overlay_pil, "RGBA")
-                            
-                            for pred in crack_predictions:
-                                if "points" in pred:
-                                    points = pred["points"]
-                                    if isinstance(points, list) and len(points) > 0:
-                                        coords = [(p.get("x", 0), p.get("y", 0)) for p in points]
-                                        if len(coords) >= 3:
-                                            draw.polygon(coords, fill=(0, 255, 0, 80), outline=(0, 255, 0, 255), width=2)
-                                elif "x" in pred and "y" in pred and "width" in pred and "height" in pred:
-                                    x, y, w, h = pred["x"], pred["y"], pred["width"], pred["height"]
-                                    draw.rectangle([x, y, x + w, y + h], fill=(0, 255, 0, 80), outline=(0, 255, 0, 255), width=2)
-                            
-                            overlay = np.array(overlay_pil)
+                        # ====================================================
+                        # COMPUTE METRICS & STORE RESULT
+                        # ====================================================
+                        puddle_severity = int(min(puddle_cov_pct * 5, 100))
+                        combined_severity = int(round(0.6 * puddle_severity + 0.4 * crack_severity_score))
                         
-                        # Blend puddle mask
-                        if puddle_mask is not None:
-                            overlay_bgr = cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
-                            overlay_bgr = draw_puddles_overlay(overlay_bgr, puddle_mask, alpha=0.4)
-                            overlay = cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB)
+                        frame_data = {
+                            "frame_number": frames_captured,
+                            "timestamp": frame_timestamp,
+                            "elapsed_seconds": round(elapsed, 1),
+                            "puddle_coverage_pct": puddle_cov_pct,
+                            "puddle_severity": puddle_severity,
+                            "cracks_detected": len(crack_predictions),
+                            "crack_severity": crack_severity_score,
+                            "combined_severity": combined_severity,
+                            "overlay_image": overlay  # RGB array
+                        }
+                        
+                        frame_results.append(frame_data)
+                        st.session_state["frame_analysis_results"] = frame_results
+                        st.session_state["frames_captured"] = frames_captured
+                        
+                        # ====================================================
+                        # UPDATE DISPLAY - LIVE PREVIEW & METRICS
+                        # ====================================================
+                        preview_ph.image(overlay, channels="RGB", use_column_width=True, caption=f"Frame {frames_captured} captured at {frame_timestamp}")
+                        
+                        # Show progress info
+                        total_cracks = sum(f['cracks_detected'] for f in frame_results)
+                        frames_with_puddles = sum(1 for f in frame_results if f['puddle_coverage_pct'] > 0)
+                        progress_info = f"""
+                        **Live Capture Progress**
+                        - Frames Captured: {frames_captured}
+                        - Elapsed Time: {round(elapsed, 1)}s
+                        - Total Cracks Found: {total_cracks}
+                        - Frames with Puddles: {frames_with_puddles}
+                        """
+                        progress_ph.markdown(progress_info)
+                        
+                        # Show latest frame metrics
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric(f"Frame {frames_captured}: Puddle %", f"{puddle_cov_pct:.1f}%")
+                        with col2:
+                            st.metric(f"Frame {frames_captured}: Cracks", len(crack_predictions))
+                        with col3:
+                            st.metric(f"Frame {frames_captured}: Puddle Severity", f"{puddle_severity}/100")
+                        with col4:
+                            st.metric(f"Frame {frames_captured}: Combined Severity", f"{combined_severity}/100")
+                        
+                        status_ph.success(f"✓ Frame {frames_captured} analyzed. Auto-capturing next frame in {capture_interval}s...")
+                        
+                        # Trigger next rerun after capture_interval seconds
+                        time.sleep(1)  # Brief delay before triggering next rerun
+                        st.rerun()
+            else:
+                # Not time to capture yet, show current results and rerun after 1 second
+                status_ph.info(f"⏳ Next frame in {round((frames_captured * capture_interval) - elapsed)}s...")
+                progress_ph.markdown(f"""
+                **Live Capture Progress**
+                - Frames Captured: {frames_captured}
+                - Elapsed Time: {round(elapsed, 1)}s
+                - Total Cracks Found: {sum(f['cracks_detected'] for f in frame_results)}
+                - Frames with Puddles: {sum(1 for f in frame_results if f['puddle_coverage_pct'] > 0)}
+                """)
+                
+                if len(frame_results) > 0:
+                    latest = frame_results[-1]
+                    preview_ph.image(latest['overlay_image'], channels="RGB", use_column_width=True, caption=f"Latest: Frame {latest['frame_number']}")
                     
-                    except Exception as e:
-                        log_ph.error(f"Overlay drawing error: {str(e)}")
-                        overlay = frame_rgb
-                    
-                    # ========================================================
-                    # DISPLAY RESULTS
-                    # ========================================================
-                    puddle_severity = int(min(puddle_cov_pct * 5, 100))
-                    combined_severity = int(round(0.6 * puddle_severity + 0.4 * crack_severity_score))
-                    
-                    # Display image
-                    img_ph.image(overlay, channels="RGB", use_column_width=True, caption="Frame Analysis")
-                    
-                    # Display metrics
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        st.metric("Puddle Coverage", f"{puddle_cov_pct:.1f}%")
+                        st.metric(f"Frame {latest['frame_number']}: Puddle %", f"{latest['puddle_coverage_pct']:.1f}%")
                     with col2:
-                        st.metric("Cracks Detected", len(crack_predictions))
+                        st.metric(f"Frame {latest['frame_number']}: Cracks", latest['cracks_detected'])
                     with col3:
-                        st.metric("Puddle Severity", f"{puddle_severity}/100")
+                        st.metric(f"Frame {latest['frame_number']}: Puddle Severity", f"{latest['puddle_severity']}/100")
                     with col4:
-                        st.metric("Combined Severity", f"{combined_severity}/100")
-                    
-                    # Display detailed metrics
-                    st.subheader("Detailed Analysis")
-                    metrics_ph.write({
-                        "Puddle Coverage %": f"{puddle_cov_pct:.1f}",
-                        "Puddle Severity Score": f"{puddle_severity}/100",
-                        "Cracks Detected": len(crack_predictions),
-                        "Crack Severity Score": f"{crack_severity_score:.1f}/100",
-                        "Combined Severity": f"{combined_severity}/100",
-                        "Frame Resolution": f"{frame_resized.shape[1]}x{frame_resized.shape[0]}"
-                    })
-                    
-                    log_ph.success("✓ Analysis complete!")
-                    
-                    cap.release()
+                        st.metric(f"Frame {latest['frame_number']}: Combined Severity", f"{latest['combined_severity']}/100")
+                
+                # Trigger rerun after 1 second to check if it's time to capture
+                time.sleep(1)
+                st.rerun()
         
         except Exception as e:
-            st.error(f"❌ Error: {str(e)}")
+            st.error(f"❌ Stream error: {str(e)}")
+            st.session_state["stream_running"] = False
+    
+    # ====================================================================
+    # DISPLAY RETAINED RESULTS AFTER STOP & PDF EXPORT
+    # ====================================================================
+    elif len(st.session_state.get("frame_analysis_results", [])) > 0:
+        frame_results = st.session_state["frame_analysis_results"]
+        
+        st.divider()
+        st.subheader("✓ Capture Stopped - Results Retained")
+        
+        # Show summary
+        total_cracks = sum(f['cracks_detected'] for f in frame_results)
+        frames_with_puddles = sum(1 for f in frame_results if f['puddle_coverage_pct'] > 0)
+        avg_puddle_cov = sum(f['puddle_coverage_pct'] for f in frame_results) / len(frame_results) if frame_results else 0
+        avg_severity = sum(f['combined_severity'] for f in frame_results) / len(frame_results) if frame_results else 0
+        
+        col_sum1, col_sum2 = st.columns(2)
+        with col_sum1:
+            st.metric("Total Frames Analyzed", len(frame_results))
+            st.metric("Total Cracks Found", total_cracks)
+        with col_sum2:
+            st.metric("Frames with Puddles", frames_with_puddles)
+            st.metric("Average Severity", f"{avg_severity:.0f}/100")
+        
+        # Show all frames in expandable sections
+        st.subheader("Detailed Frame Analysis")
+        for frame_data in frame_results:
+            with st.expander(f"Frame {frame_data['frame_number']} - {frame_data['timestamp']} - Severity {frame_data['combined_severity']}/100"):
+                col_img, col_metrics = st.columns([2, 1])
+                
+                with col_img:
+                    st.image(frame_data['overlay_image'], channels="RGB", use_column_width=True)
+                
+                with col_metrics:
+                    st.metric("Puddle Coverage", f"{frame_data['puddle_coverage_pct']:.1f}%")
+                    st.metric("Puddle Severity", f"{frame_data['puddle_severity']}/100")
+                    st.metric("Cracks Detected", frame_data['cracks_detected'])
+                    st.metric("Crack Severity", f"{frame_data['crack_severity']:.1f}/100")
+                    st.metric("Combined Severity", f"{frame_data['combined_severity']}/100")
+        
+        # PDF Export Button
+        st.divider()
+        if st.button("📄 Generate & Download PDF Report", type="primary", use_container_width=True):
             try:
-                cap.release()
-            except:
-                pass
+                from reportlab.lib.pagesizes import letter
+                from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, PageBreak, Table, TableStyle
+                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                from reportlab.lib.units import inch
+                from reportlab.lib import colors
+                
+                pdf_buffer = io.BytesIO()
+                doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
+                story = []
+                styles = getSampleStyleSheet()
+                
+                # Title Page
+                title_style = ParagraphStyle(
+                    'CustomTitle',
+                    parent=styles['Heading1'],
+                    fontSize=24,
+                    textColor=colors.HexColor("#0B1220"),
+                    spaceAfter=12
+                )
+                story.append(Paragraph("Live Stream Inspection Report", title_style))
+                story.append(Spacer(1, 0.2*inch))
+                
+                # Session Summary
+                summary_data = [
+                    ["Metric", "Value"],
+                    ["Total Frames", str(len(frame_results))],
+                    ["Total Cracks", str(total_cracks)],
+                    ["Frames with Puddles", str(frames_with_puddles)],
+                    ["Avg Puddle Coverage", f"{avg_puddle_cov:.1f}%"],
+                    ["Avg Severity Score", f"{avg_severity:.0f}/100"],
+                ]
+                
+                summary_table = Table(summary_data, colWidths=[2.5*inch, 2.5*inch])
+                summary_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#60A5FA")),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 12),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ]))
+                
+                story.append(summary_table)
+                story.append(PageBreak())
+                
+                # Frame-by-Frame Analysis
+                story.append(Paragraph("Frame-by-Frame Analysis", styles['Heading2']))
+                story.append(Spacer(1, 0.1*inch))
+                
+                for frame_data in frame_results:
+                    # Frame header
+                    frame_title = f"Frame {frame_data['frame_number']} - {frame_data['timestamp']}"
+                    story.append(Paragraph(frame_title, styles['Heading3']))
+                    
+                    # Frame metrics table
+                    metrics_data = [
+                        ["Puddle Coverage", f"{frame_data['puddle_coverage_pct']:.1f}%"],
+                        ["Puddle Severity", f"{frame_data['puddle_severity']}/100"],
+                        ["Cracks Detected", str(frame_data['cracks_detected'])],
+                        ["Crack Severity", f"{frame_data['crack_severity']:.1f}/100"],
+                        ["Combined Severity", f"{frame_data['combined_severity']}/100"],
+                    ]
+                    
+                    metrics_table = Table(metrics_data, colWidths=[2.5*inch, 2.5*inch])
+                    metrics_table.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#E0E7FF")),
+                        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('GRID', (0, 0), (-1, -1), 1, colors.lightgrey),
+                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+                    ]))
+                    
+                    story.append(metrics_table)
+                    story.append(Spacer(1, 0.15*inch))
+                    
+                    # Frame image
+                    if frame_data['overlay_image'] is not None:
+                        frame_pil = Image.fromarray(frame_data['overlay_image'])
+                        frame_buffer = io.BytesIO()
+                        frame_pil.save(frame_buffer, format='PNG')
+                        frame_buffer.seek(0)
+                        
+                        story.append(RLImage(frame_buffer, width=5*inch, height=3.75*inch))
+                    
+                    if frame_data != frame_results[-1]:
+                        story.append(PageBreak())
+                
+                # Build PDF
+                doc.build(story)
+                pdf_buffer.seek(0)
+                
+                # Download button
+                st.download_button(
+                    label="📥 Download PDF Report",
+                    data=pdf_buffer.getvalue(),
+                    file_name=f"inspection_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    mime="application/pdf"
+                )
+                
+                st.success("✓ PDF generated successfully!")
+            
+            except Exception as e:
+                st.error(f"❌ PDF generation error: {str(e)}")
 
 
 # ============================================================================

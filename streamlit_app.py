@@ -778,8 +778,7 @@ with tab_video:
                                         )
                                         result = client.infer(
                                             temp_img_path,
-                                            model_id=CRACK_MODEL_ID,
-                                            confidence=CRACK_CONF
+                                            model_id=CRACK_MODEL_ID
                                         )
                                         
                                         crack_predictions = result.get("predictions", [])
@@ -827,20 +826,21 @@ with tab_video:
                                 
                                 combined_severity = (puddle_severity * 0.6) + (crack_severity_score * 0.4)
                                 
-                                # Create overlay
-                                overlay_frame = analysis_frame.copy()
+                                # Create overlay using proper function (converts BGR to RGB first)
+                                overlay_bgr = analysis_frame.copy()
                                 
-                                # Draw cracks
+                                # Draw cracks using PIL (same as single image analysis)
                                 if crack_predictions:
-                                    for pred in crack_predictions:
-                                        x, y, w, h = int(pred['x'] - pred['width']/2), int(pred['y'] - pred['height']/2), int(pred['width']), int(pred['height'])
-                                        cv2.rectangle(overlay_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                                    overlay_rgb = cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB)
+                                    overlay_pil = Image.fromarray(overlay_rgb)
+                                    overlay_pil = draw_bounding_boxes_on_image(overlay_pil, crack_predictions)
+                                    overlay_bgr = cv2.cvtColor(np.array(overlay_pil), cv2.COLOR_RGB2BGR)
                                 
                                 # Draw water damage mask
                                 if puddle_mask is not None:
-                                    overlay_frame[puddle_mask > 0] = (100, 150, 255)
+                                    overlay_bgr[puddle_mask > 0] = (100, 150, 255)
                                 
-                                overlay_rgb = cv2.cvtColor(overlay_frame, cv2.COLOR_BGR2RGB)
+                                overlay_rgb = cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB)
                                 
                                 # Store result
                                 current_time = frame_num / fps if fps > 0 else 0
@@ -1268,8 +1268,7 @@ with tab_live:
                                 )
                                 result = client.infer(
                                     temp_path,
-                                    model_id=CRACK_MODEL_ID,
-                                    confidence=CRACK_CONF
+                                    model_id=CRACK_MODEL_ID
                                 )
                                 
                                 crack_predictions = result.get("predictions", [])
